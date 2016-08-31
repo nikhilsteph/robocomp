@@ -50,159 +50,139 @@ initDir = os.getcwd()
 sys.path.append('.')
 sys.path.append('/opt/robocomp/bin')
 
-import rcmanagerEditor
+class MainClass(QtGui.QMainWindow):
+	"""docstring for MainClass"""
+	def __init__(self, arg=None):
+		QtGui.QDialog.__init__(self,arg)
+		self.currentComponent=None
+		self.setWindowIcon(QtGui.QIcon(QtGui.QPixmap("/opt/robocomp/share/rcmanager/drawing_green.png")))
+		self.showMaximized()
+		self.componentList=[]
+		self.networkSettings=rcmanagerConfig.NetworkValues()
+		
 
+		self.UI=ui_formManager.Ui_MainWindow()
+		self.UI.setupUi(self)
+		self.UI.tabWidget.removeTab(0)
+		self.Logger=rcmanagerConfig.Logger(self.UI.textBrowser)
 
-# CommandDialog class: It's the dialog sending "up()/down() component X signal to the main
-class CommandDialog(QtGui.QWidget):
-	def __init__(self, parent, x, y):
-		QtGui.QWidget.__init__(self)
-		self.setParent(parent)
-		self.setGeometry(x, y, 100, 75)
-		self.button1 = QtGui.QPushButton(self)
-		self.button1.setGeometry(0, 0, 100, 25)
-		self.button1.setText('up')
-		self.button2 = QtGui.QPushButton(self)
-		self.button2.setGeometry(0, 25, 100, 25)
-		self.button2.setText('down')
-		self.button3 = QtGui.QPushButton(self)
-		self.button3.setGeometry(0, 50, 100, 25)
-		self.button3.setText('edit config')
-		self.show()
-		self.connect(self.button1, QtCore.SIGNAL('clicked()'), self.but1)
-		self.connect(self.button2, QtCore.SIGNAL('clicked()'), self.but2)
-		self.connect(self.button3, QtCore.SIGNAL('clicked()'), self.but3)
-	def but1(self): self.emit(QtCore.SIGNAL("up()"))
-	def but2(self): self.emit(QtCore.SIGNAL("down()"))
-	def but3(self): self.emit(QtCore.SIGNAL("config()"))
+		self.SaveWarning=rcmanagerConfig.SaveWarningDialog(self)
+		
+		self.NetworkScene=rcmanagerConfig.ComponentScene(self)##The graphicsScene
+		self.graphTree = rcmanagerConfig.ComponentTree(self.UI.frame,mainclass=self)##The graphicsNode
+		self.graphTree.setScene(self.NetworkScene)
+		self.graphTree.setObjectName(_fromUtf8("graphicsView"))
+		self.UI.gridLayout_8.addWidget(self.graphTree,0,0,1,1)
+		self.setZoom()
+		
+		#This will read the the network setting from xml files and will set the values
+		self.networkSettingDialog=rcmanagerConfig.NetworkSettings(self)
+		#tool always works either on opened xml file or user dynamically build xml file.
+		#So the two variable given below will always be the negation of each other
+		self.FileOpenStatus=False
+		self.UserBuiltNetworkStatus=True
+		
+		#To track the changes in the network both functionaly and visually
+		self.HadChanged=False
+		
+		self.LogFileSetter=rcmanagerConfig.LogFileSetter(self,self.Logger)
+		self.simulatorTimer=QtCore.QTimer()
 
+		self.connectionBuilder=rcmanagerConfig.connectionBuilder(self,self.Logger)##This will take care of connection building between components
 
-# ComponentChecker class: Threaded endpoint-pinging class.
-class ComponentChecker(threading.Thread):
-	def __init__(self, endpoint):
-		threading.Thread.__init__(self)
-		self.mutex = QtCore.QMutex(QtCore.QMutex.Recursive)
-		self.daemon = True
-		self.reset()
-		self.exit = False
-		self.alive = False
-		self.aPrx = None
-		try:
-			self.aPrx = global_ic.stringToProxy(endpoint)
-			self.aPrx.ice_timeout(1)
-		except:
-			print "Error creating proxy to " + endpoint
-			if len(endpoint) == 0:
-				print 'please, provide an endpoint'
-			raise
-			
-	def run(self):
-		global global_ic
-		while self.exit == False:
-			try:
-				self.aPrx.ice_ping()
-				self.mutex.lock()
-				self.alive = True
-				self.mutex.unlock()
-			except:
-				self.mutex.lock()
-				self.alive = False
-				self.mutex.unlock()
-			time.sleep(0.5)
-	def reset(self):
-		self.mutex.lock()
-		self.alive = False
-		self.mutex.unlock()
-	def isalive(self):
-		self.mutex.lock()
-		r = self.alive
-		self.mutex.unlock()
-		return r
-	def stop(self):
-		self.exit = True
-	def runrun(self):
-		if not self.isAlive(): self.start()
+		self.PositionMultiplier=rcmanagerConfig.PositionMultiplier(self.Logger)
 
-#
-# Application main class.
-#
-class TheThing(QtGui.QDialog):
-	def __init__(self):
-		# Create a component checker
-		self.componentChecker = {}
-		self.configFile = os.path.expanduser('~/rcmanager.xml')
-		# Gui config
-		global dict
-		QtGui.QDialog.__init__(self)
-		self.root = '/opt/robocomp/'
-		self.ui = Ui_Form()
-		self.ui.setupUi(self)
-		self.canvas = GraphView(self.ui.graphTab)
-		self.canvas.setGeometry(0, 0, 531, 581)
-		self.canvas.show()
-		self.canvasTimer = QtCore.QTimer()
-		self.canvasFastTimer = QtCore.QTimer()
-		self.connect(self.canvas, QtCore.SIGNAL("nodeReleased()"), self.setFastState)
-		self.setFastState(True)
-		self.connect(self.canvasTimer, QtCore.SIGNAL("timeout()"), self.graphUpdate)
-		self.connect(self.canvasFastTimer, QtCore.SIGNAL("timeout()"), self.graphFastEnds)
-		if dict['dock'] == 'true':
-			self.changeDock()
+		self.groupBuilder=rcmanagerConfig.GroupBuilder(self,self.Logger)##It will help to create a new group
+		#setting the code Editor
+		
+		self.groupSelector=rcmanagerConfig.GroupSelector(self,self.Logger)
 
-		# Variables needed to switch the state of components when double-clicking over them.
-		self.clickTimes = 0
-		self.lastClickTime = QtCore.QTime()
-		self.clickNumber = -1
+		self.CodeEditor=rcmanagerConfig.CodeEditor(self.UI.tab_2)
+		self.UI.verticalLayout_2.addWidget(self.CodeEditor)
 
-		# Component config containter
-		self.compConfig = []
+		#The small widget which appears when we right click on a node in tree
+		
+		self.nodeDetailDisplayer=rcmanagerConfig.ShowItemDetails(self.graphTree)
 
-		# Init component sets
-		self.back_comps = set()
-		self.requests = set()
+		#Setting up the connection
+		self.setupActions()
 
-		# Icon and system's tray stuff
-		self.iconOK = QtGui.QIcon(QtGui.QPixmap('/opt/robocomp/share/rcmanager/drawing_red.png'))
-		self.iconFULL = QtGui.QIcon(QtGui.QPixmap('/opt/robocomp/share/rcmanager/drawing_green.png'))
-		self.iconChange1 = QtGui.QIcon(QtGui.QPixmap('/opt/robocomp/share/rcmanager/drawing_right.png'))
-		self.iconChange2 = QtGui.QIcon(QtGui.QPixmap('/opt/robocomp/share/rcmanager/drawing_left.png'))
-		self.setWindowIcon(self.iconOK)
-		self.state = 0
-		self.doExit = False
-		self.systray = None
-		self.blinkTimer = QtCore.QTimer()
-		self.doDock = False
+		#self.textEdit=QtGui.QTextEdit()#Temp
+		#self.UI.tabWidget_2.addTab(self.textEdit,"Helllo")#Temp
+		#print "Count is "+ str(self.UI.verticalLayout.count())
+		#self.UI.toolButton_6.setMouseTracking(True)
+		
+	def setupActions(self):##To setUp connection like saving,opening,etc
+		self.connect(self.simulatorTimer,QtCore.SIGNAL("timeout()"),self.simulate)
+		#self.connect(self.UI.toolButton,QtCore.SIGNAL("hovered()"),self.hoverAddComponent)
+		#self.connect(self.UI.toolButton_9,QtCore.SIGNAL("hovered()"),self.hoverXmlSettings)
+		#self.connect(self.UI.toolButton_5,QtCore.SIGNAL("hovered()"),self.hoverPrintDefaultNode)
+		#self.connect(self.UI.toolButton_4,QtCore.SIGNAL("hovered()"),self.hoverPrintDefaultSettings)
+		#self.connect(self.UI.toolButton_3,QtCore.SIGNAL("hovered()"),self.hoverRefreshFromXml)
+		#self.connect(self.UI.toolButton_10,QtCore.SIGNAL("hovered()"),self.hoverNetworkTreeSettings)
+		#self.connect(self.UI.toolButton_6,QtCore.SIGNAL("hovered()"),self.hoverRefreshFromTree)
+		self.connect(self.UI.actionSet_Log_File,QtCore.SIGNAL("triggered(bool)"),self.setLogFile)
 
-		# Set the fixed timeout for component checking
-		self.timer = QtCore.QTimer()
-		self.timer.start(dict['fixed'])
+		self.connect(self.UI.tabWidget,QtCore.SIGNAL("currentChanged(int)"),self.tabIndexChanged)
+		self.connect(self.UI.actionSave,QtCore.SIGNAL("triggered(bool)"),self.saveXmlFile)
+		self.connect(self.UI.actionOpen,QtCore.SIGNAL("triggered(bool)"),self.openXmlFile)
+		self.connect(self.UI.actionExit,QtCore.SIGNAL("triggered(bool)"),self.exitRcmanager)
+		self.connect(self.UI.actionSetting,QtCore.SIGNAL("triggered(bool)"),self.rcmanagerSetting)
+		self.connect(self.UI.actionON,QtCore.SIGNAL("triggered(bool)"),self.simulatorOn)
+		self.connect(self.UI.actionOFF,QtCore.SIGNAL("triggered(bool)"),self.simulatorOff)
+		self.connect(self.UI.actionSetting_2,QtCore.SIGNAL("triggered(bool)"),self.simulatorSettings)
+		self.connect(self.UI.actionSetting_3,QtCore.SIGNAL("triggered(bool)"),self.controlPanelSettings)
+		self.connect(self.UI.actionSetting_4,QtCore.SIGNAL("triggered(bool)"),self.editorSettings)
+		self.connect(self.graphTree.BackPopUpMenu.ActionUp,QtCore.SIGNAL("triggered(bool)"),self.upAllComponents)
+		self.connect(self.graphTree.BackPopUpMenu.ActionDown,QtCore.SIGNAL("triggered(bool)"),self.downAllComponents)
+		self.connect(self.graphTree.BackPopUpMenu.ActionSearch,QtCore.SIGNAL("triggered(bool)"),self.searchInsideTree)
+		self.connect(self.graphTree.BackPopUpMenu.ActionAdd,QtCore.SIGNAL("triggered(bool)"),self.addNewNode)		
+		self.connect(self.graphTree.BackPopUpMenu.ActionSettings,QtCore.SIGNAL("triggered(bool)"),self.setNetworkSettings)
+		self.connect(self.graphTree.BackPopUpMenu.ActionNewGroup,QtCore.SIGNAL("triggered(bool)"),self.addNewGroup)
+		self.connect(self.graphTree.BackPopUpMenu.ActionStretch,QtCore.SIGNAL("triggered(bool)"),self.stretchGraph)
 
+		self.connect(self.graphTree.CompoPopUpMenu.ActionEdit,QtCore.SIGNAL("triggered(bool)"),self.EditSelectedComponent)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionDelete,QtCore.SIGNAL("triggered(bool)"),self.deleteSelectedComponent)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionUp,QtCore.SIGNAL("triggered(bool)"),self.upSelectedComponent)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionAddToGroup,QtCore.SIGNAL("triggered(bool)"),self.addComponentToGroup)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionDown,QtCore.SIGNAL("triggered(bool)"),self.downSelectedComponent)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionNewConnection,QtCore.SIGNAL("triggered(bool)"),self.BuildNewConnection)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionControl,QtCore.SIGNAL("triggered(bool)"),self.controlComponent)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionRemoveFromGroup,QtCore.SIGNAL("triggered(bool)"),self.componentRemoveFromGroup)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionUpGroup,QtCore.SIGNAL("triggered(bool)"),self.upGroup)
+		self.connect(self.graphTree.CompoPopUpMenu.ActionDownGroup,QtCore.SIGNAL("triggered(bool)"),self.downGroup)
+		#self.connect(self.graphTree.CompoPopUpMenu.ActionFreq,QtCore.SIGNAL("triggered(bool)"),self.getFreq)
 
-		self.menu = QtGui.QMenuBar(None)
-		self.ui.verticalLayout_3.insertWidget(0, self.menu)
-		self.menuFile = self.menu.addMenu('File')
-		self.menuSim = self.menu.addMenu('Simulation')
-		self.menuActions = self.menu.addMenu('Actions')
+		self.connect(self.UI.toolButton_2,QtCore.SIGNAL("clicked()"),self.searchEnteredAlias)
+		self.connect(self.UI.toolButton_7,QtCore.SIGNAL("clicked()"),self.simulatorOn)
+		self.connect(self.UI.toolButton_8,QtCore.SIGNAL("clicked()"),self.simulatorOff)
 
-		self.actionKillAll = self.menuActions.addAction('kill all')
-		self.connect(self.actionKillAll, QtCore.SIGNAL("triggered(bool)"), self.killall)
-		#self.actionRunAll = self.menuActions.addAction('run all')
-		#self.connect(self.actionRunAll, QtCore.SIGNAL("triggered(bool)"), self.runall)
+		self.connect(self.SaveWarning,QtCore.SIGNAL("save()"),self.saveXmlFile)
+		self.connect(self.UI.toolButton_3,QtCore.SIGNAL("clicked()"),self.refreshTreeFromCode)
+		self.connect(self.UI.toolButton_4,QtCore.SIGNAL("clicked()"),self.addNetworkTempl)
+		self.connect(self.UI.toolButton_5,QtCore.SIGNAL("clicked()"),self.addComponentTempl)
+		self.connect(self.UI.toolButton_6,QtCore.SIGNAL("clicked()"),self.refreshCodeFromTree)
+		self.connect(self.UI.toolButton_9,QtCore.SIGNAL("clicked()"),self.editorFontSettings)
+		#self.connect(self.UI.toolButton_10,QtCore.SIGNAL("clicked()"),self.getNetworkSetting)(Once finished Uncomment this)
+		self.connect(self.UI.toolButton,QtCore.SIGNAL("clicked()"),self.addNewComponent)
+		self.Logger.logData("Tool Started")
+	def getFreq(self):
+		comp=self.graphTree.CompoPopUpMenu.currentComponent.parent 
+		comp.CheckItem.getFreq()
+	def EditSelectedComponent(self):	
+		self.UI.tabWidget.setCurrentIndex(1)
+		self.CodeEditor.findFirst(self.graphTree.CompoPopUpMenu.currentComponent.parent.alias,False,True,True,True)
 
-		self.actionOpen = self.menuFile.addAction('Open')
-		self.connect(self.actionOpen, QtCore.SIGNAL("triggered(bool)"), self.openFile)
-		self.actionSave = self.menuFile.addAction('Save')
-		self.connect(self.actionSave, QtCore.SIGNAL("triggered(bool)"), self.saveFile)
-		self.actionEdit = self.menuFile.addAction('Edit')
-		self.connect(self.actionEdit, QtCore.SIGNAL("triggered(bool)"), self.runEditor)
-		self.actionDock = self.menuFile.addAction('Dock')
-		self.connect(self.actionDock, QtCore.SIGNAL("triggered(bool)"), self.changeDock)
-		self.actionExit = self.menuFile.addAction('Exit')
-		self.connect(self.actionExit, QtCore.SIGNAL("triggered(bool)"), self.forceExit)
+	def setLogFile(self):
+		self.LogFileSetter.setFile() 
 
-		# Do we want the eye-candy graph simulation?
-		if (dict['active'] == "true"):
-			self.doSimulation = True
+	def stretchGraph(self):
+		self.PositionMultiplier.updateStretch(self.componentList,self.networkSettings)
+
+	def upGroup(self):
+		component=self.graphTree.CompoPopUpMenu.currentComponent.parent
+		if component.group!=None:
+			component.group.upGroupComponents(self.Logger)
 		else:
 			self.doSimulation = False
 		if self.doSimulation == True:
@@ -243,60 +223,174 @@ class TheThing(QtGui.QDialog):
 		if p==None:
 			self.configFile = QtGui.QFileDialog.getOpenFileName (self, "Select file", initDir, "*.xml")
 		else:
-			self.configFile = p
+			self.Logger.logData("No group","R")
+	def addComponentToGroup(self):
+		component=self.graphTree.CompoPopUpMenu.currentComponent.parent
+		self.groupSelector.openSelector(component,self.networkSettings.Groups)
+		self.NetworkScene.update()
+		self.refreshCodeFromTree()
+	def BuildNewConnection(self):
 
-		if len(self.configFile) > 0:
-			if self.canvas.ui != None: self.canvas.ui.close()
-			self.readConfig()
+		self.graphTree.connectionBuidingStatus=True
+		print "Connection Building"
+		self.connectionBuilder.buildNewConnection()
+		self.connectionBuilder.setBeg(self.graphTree.CompoPopUpMenu.currentComponent.parent)
+		self.connectionBuilder.show()
+		
+
+	def addNewGroup(self):
+		self.groupBuilder.startBuildGroup(self.networkSettings)
+
+	def deleteSelectedComponent(self):
+		self.deleteComponent(self.graphTree.CompoPopUpMenu.currentComponent.parent)
+
+	def tabIndexChanged(self):##This will make sure the common behavior is not working unneccessarily 
+		index=self.UI.tabWidget.currentIndex()
+		if index==1 or index==2:##CommonProxy should only work if the first tab is visible
+			if self.currentComponent != None:
+				self.currentComponent.CommonProxy.setVisibility(False)
+	def addNetworkTempl(self):
+		string=rcmanagerConfig.getDefaultSettings()
+		pos=self.CodeEditor.getCursorPosition()
+		self.CodeEditor.insertAt(string,pos[0],pos[1])
+	def getNetworkSetting(self):#This will show the Network setting Dialog box and will help to update the stuffs
+		self.networkSettingDialog.setData(self.networkSettings)
+		self.networkSettingDialog.show()
+	def editorFontSettings(self):#BUUUUUUUUUUUUUGGGG
+		font,ok=QtGui.QFontDialog.getFont()
+		if ok:
+			self.CodeEditor.setFont(font)
+			self.CodeEditor.font=font
+			self.Logger.logData("New font set for code Editor")
+	def refreshCodeFromTree(self):
+		self.HadChanged=True
+		string=rcmanagerConfig.getXmlFromNetwork(self.networkSettings,self.componentList,self.Logger)
+		self.CodeEditor.setText(string)
+		self.Logger.logData("Code Updated SucceFully from the graph")
+	def refreshTreeFromCode(self,firstTime=False):#This will refresh the code (Not to file)and draw the new tree
+		#print "Refreshing"
+		try:
+			List,Settings=rcmanagerConfig.getDataFromString(str(self.CodeEditor.text()),self.Logger)
+		except Exception,e:
+			self.Logger.logData("Error while updating tree from Code::"+str(e), "R")
 		else:
-			print 'len(cfgFile) == 0'
+
+			if firstTime==True:
+				self.removeAllComponents()
+				self.NetworkScene.clear()
+				self.networkSettings=Settings
+				self.componentList=List
+				try :
+					#if self.areTheyTooClose()==True:
+						#self.theyAreTooClose()
+					self.currentComponent=self.componentList[0]
+					self.ipCount()
+					self.setAllIpColor()
+					self.setAllGraphicsData()
+					self.drawAllComponents()
+					self.setConnectionItems()
+					self.drawAllConnection()
+					self.setComponentVariables()
+					self.setDirectoryItems()
+					self.FileOpenStatus=True
+					self.UserBuiltNetworkStatus=True
+					#self.HadChanged=False
+					self.Logger.logData("File Updated SuccessFully from the Code Editor")
+					self.refreshCodeFromTree()		
+				except Exception,e:
+					self.Logger.logData("File updation from Code Failed "+str(e),"R")
+
+			else:
+				self.networkSettings=Settings
+				for x in List:
+					try:
+						comp=self.searchforComponent(x.alias)
+					except:
+						self.componentList.append(x)##This will add a new component
 
 
-	# Save the current configuration to a new file
-	def saveFile(self):
-		global dict
-		if self.canvas.ui != None: self.canvas.ui.close()
-		s = QtGui.QFileDialog.getSaveFileName (self, "Select output file", os.environ['HOME'], "*.xml")
-		if len(s) > 0:
-			for c1 in self.compConfig:
-				for c2 in self.canvas.compList:
-					if c1.alias == c2.name:
-						c1.x = c2.x
-						c1.y = c2.y
-						c1.r = c2.r
-			rcmanagerConfig.writeConfigToFile(dict, self.compConfig, s)
+				for x in self.componentList:
+					if self.searchInsideList(List,x.alias)==False:
+						self.Logger.logData("Deleted the older component ::"+x.alias)##If new tree does have this	
+						self.deleteComponent(x)
 
-	# Dock icon blinking method.
-	def changeDock(self):
-		global dict
-		if self.canvas.ui != None: self.canvas.ui.close()
-		if self.doDock == False:
-			self.systray = QtGui.QSystemTrayIcon(self)
-			self.systray.setIcon(self.iconOK)
-			self.systray.setVisible(True)
-			self.connect(self.systray, QtCore.SIGNAL("activated (QSystemTrayIcon::ActivationReason)"), self.toggle)
-			self.connect(self.blinkTimer, QtCore.SIGNAL("timeout()"), self.changeIcon)
-			self.iconNumber = 0
-			self.doDock = True
-			dict['dock'] = 'true'
-			self.actionDock.setText('Undock')
-		else:
-			self.systray.deleteLater()
-			self.disconnect(self.blinkTimer, QtCore.SIGNAL("timeout()"), self.changeIcon)
-			self.iconNumber = 0
-			self.doDock = False
-			dict['dock'] = 'false'
-			self.actionDock.setText('Dock')
+				for x in self.componentList:
+					for y in List:
+						if x.alias==y.alias:
+							self.copyAndUpdate(x,y)
+				self.Logger.logData("Tree Updated succesfully From File")
+	def copyAndUpdate(self,original,temp):
+		if original.x!=temp.x or original.y!=temp.y:
+			original.x=temp.x
+			original.y=temp.y
+			original.graphicsItem.setPos(original.x,original.y)
+			original.graphicsItem.updateforDrag()	
+			self.Logger.logData("Position Updated of ::"+original.alias)
+		
+		original.workingdir=temp.workingdir
+		original.compup=temp.compup
+		original.compdown=temp.compdown
+		original.configFile=temp.configFile
+		original.nodeColor=temp.nodeColor
 
-	# Stop graph simulation if its running or vice versa.
-	def sSimulation(self):
-		global dict
-		self.doSimulation = not self.doSimulation
-		if self.doSimulation == False:
-			self.actionSS.setText('Start')
-			if self.fastState == False:
-				self.canvasTimer.start(dict['focustime'])
-			dict['active'] = 'false'
+		if original.groupName!=temp.groupName:
+			try:
+				group=rcmanagerConfig.searchForGroupName(self.networkSettings,original.groupName)
+				group.addComponent(original)
+			except Exception,e:
+				self.Logger.logData(str(e),"R")
+
+		for x in temp.dependences: ##For adding new connection if needed
+			if original.dependences.__contains__(x)==False:
+				original.dependences.append(x)
+				comp=searchforComponent(x)
+				self.setAconnection(comp,original)
+		for x in original.dependences:##For deleting unwanted connection if needed
+			name=x
+			if temp.dependences.__contains__(x)==False:
+				original.dependences.remove(x)
+				for y in original.asEnd:
+					if y.fromComponent.alias==name:
+						original.asEnd.remove(y)
+
+		if original.Ip!=temp.Ip:
+			original.Ip=temp.Ip
+			self.ipCount()
+			self.setAllIpColor()
+
+		if original.endpoint!=temp.endpoint:
+			original.CheckItem.initializeComponent()
+
+
+	def searchInsideList(self,List,name):
+		flag=0
+		for x in List:
+			if x.alias==name:
+				flag+=1
+				return True
+
+		if flag==0:
+			return False
+
+	def printTemplSettings(self):
+		pass
+	def addComponentTempl(self):
+		string=rcmanagerConfig.getDefaultNode()
+		pos=self.CodeEditor.getCursorPosition()
+		self.CodeEditor.insertAt(string,pos[0],pos[1])
+	def searchEnteredAlias(self):#Called when we type an alias and search it
+		try:
+			alias=self.UI.lineEdit.text()
+			if alias== '':
+				raise Exception("No Name Entered")
+				
+			else :
+				x=self.searchforComponent(alias)#Write here what ever should happen then
+				self.graphTree.centerOn(x.graphicsItem)
+				#x.graphicsItem.setSelected(True)
+			self.Logger.logData(alias+"  Found")
+		except Exception, e:
+			self.Logger.logData("Search Error::  "+ str(e),"R")
 		else:
 			self.actionSS.setText('Stop')
 			self.setFastState()
@@ -671,28 +765,90 @@ class GraphView(QtGui.QWidget):
 						notFound = False
 						self.VisualNodeCogia.on = parent.componentChecker[self.VisualNodeCogia.name].isalive()
 					break
-			if notFound:
-				for myComp in self.compList:
-					if myComp.name == parentComp.alias:
-						notFound = False
-						myComp.on = parent.componentChecker[myComp.name].isalive()
-						break
-			if notFound:
-				newOne = GraphNode()
-				newOne.color = parentComp.color
-				newOne.htmlcolor = parentComp.htmlcolor
-				newOne.name = parentComp.alias
-				newOne.deps = parentComp.dependences
-				newOne.x = float(parentComp.x)
-				newOne.y = float(parentComp.y)
-				newOne.r = float(parentComp.r)
-				self.compList.append(newOne)
-				anyone = True
-		#if anyone == True: self.step(self)
-	def step(self, parent):
-		#
-		# Compute velocities
-		for iterr in self.compList:
+
+			if flag==False:
+				self.ipList.append(x.Ip)
+			
+	def setAllIpColor(self):#A small algorithm to allot colors to each Ip
+		try:
+			diff=int(765/self.ipList.__len__())
+			for x in range(self.ipList.__len__()): 
+				num=(x+1)*diff
+				
+				if num<=255:
+					for y in self.componentList.__iter__():
+						if self.ipList[x]==y.Ip:
+							y.graphicsItem.IpColor=QtGui.QColor.fromRgb(num,0,0)
+				elif num>255 and num <=510:
+					for y in self.componentList.__iter__():
+						if self.ipList[x]==y.Ip:
+							y.graphicsItem.IpColor=QtGui.QColor.fromRgb(255,num-255,0)
+				elif num>510:
+					for y in self.componentList.__iter__():
+						if self.ipList[x]==y.Ip:
+							y.graphicsItem.IpColor=QtGui.QColor.fromRgb(255,255,num-510)
+			self.Logger.logData("IpColor Alloted SuccessFully")				
+		except Exception,e:
+			raise Exception("Error During Alloting Ipcolors "+str(e))
+			  	
+
+	def setComponentVariables(self):#Temperory function to be edited later
+		for x in self.componentList.__iter__():
+			x.View=self.graphTree
+			x.mainWindow=self				
+			self.connect(x,QtCore.SIGNAL("networkChanged()"),self.haveChanged)
+
+	def setDirectoryItems(self):#This will set and draw all the directory components+I have added the job of defining a connection in here
+		for x in self.componentList.__iter__():
+			x.DirectoryItem.setParent(self.UI.scrollAreaWidgetContents)
+			self.UI.verticalLayout.insertWidget(self.UI.verticalLayout.count()-1,x.DirectoryItem)
+		#print "Count is "+ str(self.UI.verticalLayout.count())
+	
+	def componentSettings(self,component):#To edit the settings of currentComponent
+		print "Settings of current component"
+	def controlComponent(self,component):#To open up the control panel of current component
+		print "Controlling the current component"
+	def downSelectedComponent(self):
+		component=self.graphTree.CompoPopUpMenu.currentComponent
+		rcmanagerConfig.downComponent(component.parent,self.Logger)
+	
+	
+
+	def upSelectedComponent(self):#This will up a selected component
+		component=self.graphTree.CompoPopUpMenu.currentComponent
+		rcmanagerConfig.upComponent(component.parent,self.Logger)
+	def setNetworkSettings(self):#To edit the network tree general settings
+		print "network setting editing"	
+	def searchInsideTree(self):#To search a particular component from tree
+		print "Searching inside the tree"
+	def upAllComponents(self):#To set all components in up position
+		for x in self.componentList.__iter__():
+			try:
+				rcmanagerConfig.upComponent(x,self.Logger)
+			except Exception, e:
+				pass
+	def downAllComponents(self):#To set all components in down position
+		for x in self.componentList.__iter__():
+			try:
+				rcmanagerConfig.downComponent(x,self.Logger)
+				time.sleep(.5)
+			except Exception,e :
+				pass
+	def simulatorSettings(self):##To edit the simulatorSettings:Unfinished
+		print "Simulator settings is on"
+	def controlPanelSettings(self):##To edit the controlPanel Settings:Unfinshed
+		print "Control panel settings"
+	def editorSettings(self):##To edit the editors settins:Unfinshed
+		print "Editor Settings"	
+	def simulatorOff(self):	#To switch Off the simulator::Unfiunished
+		self.Logger.logData("Simulator Ended")
+		self.simulatorTimer.stop()
+	def simulatorOn(self):
+		self.Logger.logData("Simulator Started")
+		self.simulatorTimer.start(300)
+	def simulate(self):#To switch ON simulator::Unfinished
+		
+		for iterr in self.componentList:
 			force_x = force_y = 0.
 			for iterr2 in self.compList:
 				if iterr.name == iterr2.name: continue
@@ -732,161 +888,179 @@ class GraphView(QtGui.QWidget):
 		for iterr in self.compList:
 			iterr.x += iterr.vel_x
 			iterr.y += iterr.vel_y
+		
+		for iterr in self.componentList:
+			#print "updating "+iterr.alias
+			iterr.graphicsItem.setPos(QtCore.QPointF(iterr.x,iterr.y))
+			iterr.graphicsItem.updateforDrag()
 
-	def center(self):
-		total = 0
-		totalx = 0.
-		totaly = 0.
-		for iterr in self.compList:
-			totalx += iterr.x
-			totaly += iterr.y
-			total  += 1
-		if self.VisualNodeCogia:
-			totalx += self.VisualNodeCogia.x
-			totaly += self.VisualNodeCogia.y
-			total  += 1
+	def simulate2(self):##Another Simulation algorithum Working on that..
+		min=self.componentList[0]
+		for iterr in self.componentList:
+			if iterr.x<min.x:
+				min=iterr
 
-		if abs(totalx) > 0.001:
-			meanx = totalx / total
-			for iterr in self.compList:
-				iterr.x -= meanx
-			if self.VisualNodeCogia:
-				self.VisualNodeCogia.x -= meanx
-		if abs(totaly) > 0.001:
-			meany = totaly / total
-			for iterr in self.compList:
-				iterr.y -= meany
-			if self.VisualNodeCogia:
-				self.VisualNodeCogia.y -= meany
+				
+				
+	def rcmanagerSetting(self):#To edit the setting of the entire rcmanager settings tool
+		pass
+	def exitRcmanager(self):##To exit the tool after doing all required process
+		print "Exiting"
+	def drawAllComponents(self):#Called to draw the components
+		for x in self.componentList.__iter__():
+			self.NetworkScene.addItem(x.graphicsItem)
 
-	def paintNode(self, node):
-		w2 = self.parent().width()/2
-		h2 = self.parent().height()/2+30
-		global dict
+	def drawAllConnection(self):#This will start drawing Item
+		for x in self.componentList.__iter__():
+			for y in x.asBeg.__iter__():
+				self.NetworkScene.addItem(y)
 
-		if node.on:
-			self.painter.setBrush(QtGui.QColor(0, 255, 0, dict['alpha']))
-			self.painter.setPen(QtGui.QColor(0, 255, 0))
-		else:
-			self.painter.setBrush(QtGui.QColor(255, 0, 0, dict['alpha']))
-			self.painter.setPen(QtGui.QColor(255, 0, 0))
-		self.painter.drawEllipse(node.x-node.r+w2, node.y-node.r+h2, node.r*2, node.r*2)
+	def setConnectionItems(self):#This is called right after reading from a file,Sets all the connection graphicsItems
+		for x in self.componentList.__iter__():
+			
+			for y in x.dependences.__iter__():
+				try :
+					comp=self.searchforComponent(y)
+					self.setAconnection(comp,x)
+					self.Logger.logData("Connection from "+comp.alias+" to "+x.alias+" Set")
+				except Exception,e:
+					print "Error while setting connection ::"+str(e)
 
-		self.painter.drawText(QtCore.QPoint(node.x-node.r+w2, node.y-node.r-3+h2), node.name)
+	def searchforComponent(self,alias):#this will search inside the components tree
+		flag=False
+		for x in self.componentList.__iter__():
+			if x.alias==alias:
+				flag=True
+				return x
+		if not flag:
+			raise Exception("No such component with alias "+alias)
 
-		if node.color != None:
-			self.painter.setBrush(node.color)
-			self.painter.setPen(node.color)
-			self.painter.drawEllipse(node.x-node.r/4+w2, node.y-node.r/4+h2, node.r/2, node.r/2)
+	
+	def setAconnection(self,fromComponent,toComponent):#To set these two components
+		
+		connection=rcmanagerConfig.NodeConnection()
+		
+		connection.toComponent=toComponent
+		connection.fromComponent=fromComponent
+		
+		fromComponent.asBeg.append(connection)
+		toComponent.asEnd.append(connection)
+		
+		fromComponentPort,toComponentPort=rcmanagerConfig.findWhichPorts(fromComponent,toComponent)
+		
+		connection.fromX,connection.fromY=rcmanagerConfig.findPortPosition(fromComponent,fromComponentPort)
+		connection.toX,connection.toY=rcmanagerConfig.findPortPosition(toComponent,toComponentPort)	
 
+	def removeAllComponents(self):#This removes all the components from everywhere#BUUUUUG
+		len=self.componentList.__len__()
+		for x in range(len):
+			self.deleteComponent(self.componentList[len-1-x])
+	def openXmlFile(self,terminalArg=False,UserHaveChoice=True):#To open the xml files ::Unfinished
+		Settings=rcmanagerConfig.NetworkValues()
+		List=[]
+		try:
+			if self.HadChanged :# To make sure the data we have been working on have been saved
+				decision=self.SaveWarning.decide()
+				if decision=="C":
+					raise Exception(" Reason:Canceled by User")
+				elif decision=="S":					
+					self.saveXmlFile()			
+			if terminalArg==False and UserHaveChoice==True:
+				self.filePath=QtGui.QFileDialog.getOpenFileName(self,'Open file',initDir,'*.xml')
+			
+			string=rcmanagerConfig.getStringFromFile(self.filePath)
+			self.CodeEditor.setText(string)
+		except:
+			self.Logger.logData("Couldn't Read from File")	
+		self.refreshTreeFromCode(firstTime=True)
+		self.HadChanged=False
+	def setAllGraphicsData(self):
+		for x in self.componentList:
+			x.setGraphicsData()
+	def StatusBarFileNameWrite(self,string):
+		Label=QtGui.QLabel(string)
+		self.UI.statusbar.addWidget(Label)
+	def saveXmlFile(self):##To save the entire treesetting into a xml file
+		try:
+			saveFileName=QtGui.QFileDialog.getSaveFileName(self,'Save File',initDir,'*.xml')
+			saveFileName=str(saveFileName)
+			if saveFileName.endswith(".xml")==False:
+				saveFileName=saveFileName+".xml"
+			string=self.CodeEditor.text()
+			try:
+				file = open(saveFileName, 'w')
+				file.write(string)
+			except:
+				raise Exception("Can't Open"+saveFileName)
+			#rcmanagerConfig.writeToFile(file,string)
 
-	def paintEvent(self, event):
-		w2 = self.tab.width()/2
-		h2 = self.tab.height()/2+30
-		nodosAPintar = [] + self.compList
-		if self.VisualNodeCogia: nodosAPintar.append(self.VisualNodeCogia)
+			self.Logger.logData("Saved to File "+saveFileName+" ::SuccessFull")
+		except Exception,e:
+			self.Logger.logData("Saving to File"+saveFileName+" ::Failed."+str(e),"R")
+	
+	#def saveTofile(fileName):#Save to this filename
+	#	rcmanagerConfig.writeConfigToFile(self.networkSettings,self.componentList,fileName)
+			
+	
+	def setZoom(self): ##To connect the slider motion to zooming
+		self.UI.verticalSlider.setRange(-20,20)
+		self.UI.verticalSlider.setTickInterval(1)
+		self.UI.verticalSlider.setValue(0)
+		self.currentZoom=0
+		self.UI.verticalSlider.valueChanged.connect(self.graphZoom)
+	def graphZoom(self):##To be called when ever we wants to zoomingfactor
+		self.graphTree.setTransformationAnchor(self.graphTree.AnchorUnderMouse)
+		new=self.UI.verticalSlider.value()
+		diff=new-self.currentZoom
+		self.currentZoom=new
+		zoomingfactor=math.pow(1.2,diff)
+		#print zoomingfactor
+		self.graphTree.scale(zoomingfactor,zoomingfactor)
+	
+	def addNewNode(self):##Called where right clicked and seleceted to add a new node
+		pos=self.graphTree.BackPopUpMenu.pos
+		scenePos=self.graphTree.mapToScene(pos)
+		self.addNewComponent(scenePos)	
 
-		self.painter = QtGui.QPainter(self)
-		self.painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+	def addNewComponent(self,pos=QtCore.QPointF()):#The final function which takes care of adding new component default zero
+	
+		component=rcmanagerConfig.CompInfo(view=self.graphTree,mainWindow=self,name="Component"+str(self.componentList.__len__()))
+		#component.CheckItem.setLogger(self.Logger)
+		self.componentList.append(component)
+		component.x=pos.x()
+		component.y=pos.y()
+		component.graphicsItem.setPos(pos)
+		self.NetworkScene.addItem(component.graphicsItem)
+		self.refreshCodeFromTree()
+		component.DirectoryItem.setParent(self.UI.scrollAreaWidgetContents)
+		self.UI.verticalLayout.insertWidget(self.UI.verticalLayout.count()-1,component.DirectoryItem)
+		self.UI.tabWidget.setCurrentIndex(1)
+		self.CodeEditor.findFirst("Component"+str(self.componentList.__len__()-1),False,True,True,True)
+	def deleteComponent(self,component):##This will delete the component Not completed 
+		
+		#	print component.alias
+		
+		for x in component.asBeg:
+			x.toComponent.dependences.remove(component.alias)
+			x.toComponent.asEnd.remove(x)
+			self.NetworkScene.removeItem(x)
+		for x in component.asEnd:
+			x.fromComponent.asBeg.remove(x)
+			self.NetworkScene.removeItem(x)
 
-		for i in nodosAPintar:
-			xo = i.x
-			yo = i.y
-			for j in  nodosAPintar:
-				if j.name in i.deps:
-					angle = 180.-(math.atan2(yo-j.y, xo-j.x)*(57.2957795))
-					xinc = j.x - i.x
-					yinc = j.y - i.y
-
-					mag =  ( xinc**2. + yinc**2. )**0.5
-					if mag == 0: continue
-
-
-					xshift = (xinc/mag)
-					yshift = (yinc/mag)
-
-					xinit = i.x+xshift*i.r
-					yinit = i.y+yshift*i.r
-					xend = xinit+((mag-i.r-j.r)*math.cos(angle*(math.pi/180.)))
-					yend = yinit-((mag-i.r-j.r)*math.sin(angle*(math.pi/180.)))
-
-					self.painter.setPen(QtGui.QColor(0, 0, 255, 150))
-					self.painter.drawLine(xinit+w2, yinit+h2, xend+w2, yend+h2)
-					self.painter.setBrush(QtGui.QColor(0, 0, 255, 200))
-					#-j.r-(xshift/i.r)*j.r,
-					#-j.r-(yshift/i.r)*j.r
-					px = j.x-10-xshift*j.r
-					py = j.y-10-yshift*j.r
-					self.painter.drawPie(px+w2, py+h2, 20, 20, abs((angle+180-16)*16), 32*16)
-
-		self.painter.setFont(QtGui.QFont("Arial", 13));
-		for i in self.compList:
-			self.paintNode(i)
-		if self.VisualNodeCogia:
-			self.paintNode(self.VisualNodeCogia)
-		self.painter = None
-
-	def mousePressEvent(self, e):
-		self.showNodeMenu(e)
-	def mouseDoubleClickEvent(self, e):
-		self.showNodeMenu(e, True)
-	def showNodeMenu(self, e, forceDialog=False):
-		w2 = self.parent().width()/2
-		h2 = self.parent().height()/2 + 30
-		x = e.x()-w2
-		y = e.y()-h2
-		if self.ui: self.ui.close()
-		VisualNode = None
-		minDist = -1.
-		minIndex = 0
-		for b in self.compList:
-			bx = b.x
-			by = b.y
-			dist = (  (bx-x)**2  +  (by-y)**2  )**0.5
-			if dist < b.r:
-				if dist < minDist or minDist == -1.:
-					VisualNode = b
-					minDist = dist
-					minIndex = self.compList.index(b)
-					self.ox = x - b.x
-					self.oy = y - b.y
-		if VisualNode:
-			if e.button() == 2 or forceDialog:
-				self.ui = CommandDialog(self, self.compList[minIndex].x+w2, self.compList[minIndex].y+h2)
-				self.ui.idx = minIndex
-				self.connect(self.ui, QtCore.SIGNAL('up()'), self.up)
-				self.connect(self.ui, QtCore.SIGNAL('down()'), self.down)
-				self.connect(self.ui, QtCore.SIGNAL('config()'), self.config)
-				self.ui.show()
-			elif e.button() == 1:
-				self.VisualNodeCogia = self.compList.pop(minIndex)
-		self.repaint()
-	def mouseReleaseEvent(self, e):
-		if self.VisualNodeCogia != None:
-			self.compList.append(self.VisualNodeCogia)
-			self.VisualNodeCogia = None
-			self.emit(QtCore.SIGNAL("nodeReleased()"))
-	def mouseMoveEvent(self, e):
-		w2 = self.parent().width()/2
-		h2 = self.parent().height()/2+30
-		self.repaint()
-		if self.VisualNodeCogia != None:
-			self.VisualNodeCogia.x = e.x()-self.ox-w2
-			self.VisualNodeCogia.y = e.y()-self.oy-h2
-			self.repaint()
-	def up(self):
-		self.request = self.compList[self.ui.idx].name
-		self.ui.close()
-		self.emit(QtCore.SIGNAL("upRequest()"))
-	def down(self):
-		self.request = self.compList[self.ui.idx].name
-		self.ui.close()
-		self.emit(QtCore.SIGNAL("downRequest()"))
-	def config(self):
-		self.request = self.compList[self.ui.idx].name
-		self.emit(QtCore.SIGNAL("configRequest()"))
-		self.ui.close()
-
+		if component.group!=None:	
+			component.group.removeComponent(component)
+		component.CheckItem.stop()
+		self.NetworkScene.removeItem(component.graphicsItem)
+		self.NetworkScene.update()
+		component.DirectoryItem.hide()
+		
+		for x in self.componentList.__iter__():
+			if component.graphicsItem==x.graphicsItem:
+				self.componentList.remove(component)
+		self.refreshCodeFromTree()
+		self.Logger.logData("Deleted the Component:: "+component.alias+" SuccessFully")
+		#print self.componentList.__len__()
 
 #
 # Create the Qt application, the class, and runs the program
