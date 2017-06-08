@@ -107,7 +107,7 @@ pool = IDSLPool(imports)
 for interface_required in component['requires'] + component['implements'] + component['subscribesTo'] + component['publishes']:
 	interface_required = interface_required if type(interface_required) == str else interface_required[0]
 	if not pool.moduleProviding(interface_required):
-		raise rcExceptions.InterfaceNotFound(interface_required)
+		raise rcExceptions.InterfaceNotFound(interface_required, ["test"])
 
 if component['language'].lower() == 'cpp':
 	#
