@@ -1,4 +1,4 @@
-import difflib
+import difflib, sys, inspect
 
 class RobocompDslException(Exception):
 	"""A base class for robocompdsl's exceptions."""
@@ -18,3 +18,10 @@ class InterfaceNotFound(RobocompDslException):
 			if len(similar_list) > 0:
 				self.message = self.message + ". Did you mean " + str(similar_list[0])
 		super(InterfaceNotFound, self).__init__(self.message)
+
+class ParseException(RobocompDslException):
+
+	def __init__(self, msg, line, column):
+		info = line + '\n' + " "*(column-1) + "^"
+		self.message = msg + '\n' + info
+		super(ParseException, self).__init__(self.message)
